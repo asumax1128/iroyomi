@@ -840,7 +840,7 @@ let G=null, persona=PERSONAS.takeshi, phase="setup", selPos=-1, attackFrom="main
 // オンライン対戦の状態（showTitle等の初期化から参照されるため前方で宣言）
 let online=false, NET=null, netRole=null, netMyName="あなた", peerName="相手";
 let netBuf=null, netWaitFinal=false, netSeed=0, netCfg=null;
-let netReplaying=false, netByePending=false;
+let netChain=Promise.resolve(), netByePending=false, netLive=false;
 let netJkMine=null, netJkTheirs=null, netHelloTimer=null, netSelN=4, netSelDisp="full", netRoomCode="";
 let viewCombos=null, justOpened=new Set(), cpuTimer=null;
 let whyMode=false;
@@ -1078,7 +1078,7 @@ function pumpCutin(){
   c.classList.remove("hidden");
   const close=()=>{ if(cutinTimer){ clearTimeout(cutinTimer); cutinTimer=null; } c.classList.add("hidden"); c.onclick=null; cutinBusy=false; item.res(); pumpCutin(); };
   c.onclick=close;
-  if(online && netReplaying){ cutinTimer=setTimeout(close, item.ms? Math.min(item.ms,1400) : 1500); }
+  if(online && netLive){ cutinTimer=setTimeout(close, item.ms? Math.min(item.ms,1400) : 1500); }
 }
 function clearCutins(){
   cutinQueue=[]; cutinBusy=false;
@@ -2022,7 +2022,7 @@ function fbRoute(o){
   else if(o.t==="bye") R("bye/"+netRole).set({at:Date.now()});
 }
 function netLeave(notify){
-  netReplaying=false; netByePending=false;
+  netLive=false; netByePending=false; netChain=Promise.resolve();
   if(notify) netSend({t:"bye"});
   if(NET){ NET.close(); NET=null; }
   if(netHelloTimer){ clearInterval(netHelloTimer); netHelloTimer=null; }
@@ -2062,6 +2062,7 @@ function netBeginMatch(firstSide){
   online=true;
   $("onlineOverlay").classList.add("hidden");
   $("titleOverlay").classList.add("hidden");
+  netLive=true;
   log("オンライン対戦開始。"+ACTIVE_N+"枚／相手："+peerName);
   if(firstSide==="P") startPlayerTurn(true);
   else netEnterWait();
@@ -2070,10 +2071,11 @@ function netEnterWait(){
   phase="cpu"; selPos=-1;
   setStatus(peerName+" の番…", true);
   renderAll();
-  netBuf={ events:[], snaps:[snapshotView()] };
   const rt=doReveal(G);
-  if(rt){ netBuf.events.push({type:"reveal", tile:rt}); netBuf.snaps.push(snapshotView()); renderAll(); }
+  if(rt){ log("【公開】"+tileLabel(rt)); sndOpen(); if(Math.random()<0.6) say(personaLine("reveal")); renderAll();
+    netPresent(async ()=>{ if(online) await showCutin(revealCutinHtml(rt), "", 1700); }); }
 }
+function netPresent(fn){ netChain=netChain.then(fn).catch(()=>{}); }
 function netEnterWaitFinal(){
   phase="cpu";
   setStatus("全部 開けた！\nでも、"+peerName+" に 最後の1回が ある…", true);
@@ -2085,42 +2087,65 @@ function netOnAct(o){
     if(o.a==="attack"){ doAttack(G,"C",o.pos,o.num); justOpened=new Set([G.desc.P[o.pos].id]); sndHit(); renderAll(); }
     return;
   }
-  if(!netBuf) return;
-  if(o.a==="question"){ const r=doQuestion(G,"C",o.poolIdx); netBuf.events.push({type:o.convert? "convert":"question", card:r.card, ans:r.ans}); }
-  else if(o.a==="attack"){ const hit=doAttack(G,"C",o.pos,o.num); netBuf.events.push({type:"attack", pos:o.pos, num:o.num, hit:hit}); }
-  else if(o.a==="penalty"){ const tile=doPenaltyOpen(G,"C",o.pos); netBuf.events.push({type:"penalty", pos:o.pos, tile:tile}); }
-  else return;
-  netBuf.snaps.push(snapshotView());
+  netPresent(async ()=>{
+    if(!online || !G || G.over) return;
+    if(o.a==="question"){
+      const r=doQuestion(G,"C",o.poolIdx);
+      log((o.convert? "【変換】":"質問")+"（"+persona.name+"）「"+QUESTIONS[r.card].text+"」→ "+(r.ans? "はい":"いいえ"));
+      say(personaLine(o.convert? "convert":"question")); sndQ(); renderAll();
+      await showCutin("<div class='ttl'>"+persona.name+" の"+(o.convert? "変換質問":"質問")+"</div><div class='q'>「"+qBreak(QUESTIONS[r.card].text)+"」</div><div class='big "+(r.ans? "yes":"no")+"'>"+(r.ans? "はい":"いいえ")+"</div><div class='sub'>（あなたの列への質問です）</div>", "theirs");
+    } else if(o.a==="attack"){
+      await showCutin("<div class='ttl'>"+persona.name+" のアタック</div><div class='q'>左から "+(o.pos+1)+" 番目、"+o.num+" ？</div>", "theirs", 1900);
+      if(!online || !G || G.over) return;
+      const hit=doAttack(G,"C",o.pos,o.num);
+      const d=G.desc.P[o.pos];
+      log("アタック（"+persona.name+"）あなたの "+(o.pos+1)+"番目 = "+o.num+" … "+(hit? "当たり！":"はずれ"));
+      if(rowAllOpened(G,"P")) finalFlip=new Set([d.id]);
+      if(hit){ justOpened=new Set([d.id]); sndHit(); say(personaLine("hit")); } else { sndMiss(); say(personaLine("miss")); }
+      renderAll();
+      await showCutin("<div class='big "+(hit? "hit":"miss")+"'>"+(hit? "当たり！":"はずれ")+"</div>"+(hit? "<div class='sub'>"+tileLabel(G.hands.P[o.pos])+" が開いた</div>":""), "theirs", 2100);
+    } else if(o.a==="penalty"){
+      const tile=doPenaltyOpen(G,"C",o.pos);
+      justOpened=new Set([G.desc.C[o.pos].id]);
+      if(rowAllOpened(G,"C")) finalFlip=new Set([G.desc.C[o.pos].id]);
+      sndOpen();
+      log("ペナルティで "+persona.name+" は自分の "+tileLabel(tile)+" を開けた。");
+      renderAll();
+      await showCutin("<div class='ttl'>ペナルティ</div><div class='q'>"+persona.name+" は 自分のタイルを 1枚 開ける</div>", "theirs", 1700);
+    }
+  });
 }
 function netOnEnd(o){
   if(o.final){
     if(G && G.over) return;
     netWaitFinal=false; netByePending=false;
-    if(rowAllOpened(G,"P")) gameOver("D","両方、全部開いた ― 引き分け");
-    else gameOver("P","あなたの勝ち！");
+    netPresent(()=>{ if(!online || !G || G.over) return;
+      if(rowAllOpened(G,"P")) gameOver("D","両方、全部開いた ― 引き分け");
+      else gameOver("P","あなたの勝ち！");
+    });
     return;
   }
-  const buf=netBuf; netBuf=null;
-  if(!buf) return;
-  netReplaying=true;
-  playEvents(buf.events, buf.snaps, ()=>{
-    netReplaying=false;
+  netPresent(()=>{
+    if(!online || !G || G.over) return;
     if(rowAllOpened(G,"P")){ netByePending=false; if(finalAttackGranted("P")) startPlayerFinalAttack(); else gameOver("C", peerName+" が あなたの列を 全部開けた"); return; }
     if(rowAllOpened(G,"C")){ netByePending=false; gameOver("P", peerName+" の列が全部開いてしまった"); return; }
-    if(netByePending){ netByePending=false; netOnBye(); return; }
+    if(netByePending) return;
     startPlayerTurn(false);
   });
 }
-function netOnBye(){
-  if(!online){ netSetStatus("相手が 退出しました。<br>新しい相手の 参加を 待っています…"); return; }
-  if(G && G.over) return;
-  if(netWaitFinal){ netWaitFinal=false; gameOver("P", peerName+" が 退出した"); return; }
-  if(netReplaying){ netByePending=true; return; }
+function netExitNotice(){
   const nm=peerName;
   netLeave(false);
   $("onlineOverlay").classList.add("hidden");
   showTitle();
   showCutin("<div class='ttl'>接続が切れた</div><div class='q'>"+nm+" が 退出しました</div>", "theirs");
+}
+function netOnBye(){
+  if(!online){ netSetStatus("相手が 退出しました。<br>新しい相手の 参加を 待っています…"); return; }
+  if(G && G.over) return;
+  if(netWaitFinal){ netWaitFinal=false; gameOver("P", peerName+" が 退出した"); return; }
+  netByePending=true;
+  netPresent(()=>{ if(netByePending && online && !(G && G.over)){ netByePending=false; netExitNotice(); } });
 }
 function netOnMessage(o){
   if(o.t==="hello" && netRole==="host"){
