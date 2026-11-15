@@ -840,7 +840,7 @@ let G=null, persona=PERSONAS.takeshi, phase="setup", selPos=-1, attackFrom="main
 // オンライン対戦の状態（showTitle等の初期化から参照されるため前方で宣言）
 let online=false, NET=null, netRole=null, netMyName="あなた", peerName="相手";
 let netBuf=null, netWaitFinal=false, netSeed=0, netCfg=null;
-let netChain=Promise.resolve(), netByePending=false, netLive=false;
+let netChain=Promise.resolve(), netByePending=false;
 let netJkMine=null, netJkTheirs=null, netHelloTimer=null, netSelN=4, netSelDisp="full", netRoomCode="";
 let viewCombos=null, justOpened=new Set(), cpuTimer=null;
 let whyMode=false;
@@ -1078,7 +1078,6 @@ function pumpCutin(){
   c.classList.remove("hidden");
   const close=()=>{ if(cutinTimer){ clearTimeout(cutinTimer); cutinTimer=null; } c.classList.add("hidden"); c.onclick=null; cutinBusy=false; item.res(); pumpCutin(); };
   c.onclick=close;
-  if(online && netLive){ cutinTimer=setTimeout(close, item.ms? Math.min(item.ms,1400) : 1500); }
 }
 function clearCutins(){
   cutinQueue=[]; cutinBusy=false;
@@ -2022,7 +2021,7 @@ function fbRoute(o){
   else if(o.t==="bye") R("bye/"+netRole).set({at:Date.now()});
 }
 function netLeave(notify){
-  netLive=false; netByePending=false; netChain=Promise.resolve();
+  netByePending=false; netChain=Promise.resolve();
   if(notify) netSend({t:"bye"});
   if(NET){ NET.close(); NET=null; }
   if(netHelloTimer){ clearInterval(netHelloTimer); netHelloTimer=null; }
@@ -2062,7 +2061,6 @@ function netBeginMatch(firstSide){
   online=true;
   $("onlineOverlay").classList.add("hidden");
   $("titleOverlay").classList.add("hidden");
-  netLive=true;
   log("オンライン対戦開始。"+ACTIVE_N+"枚／相手："+peerName);
   if(firstSide==="P") startPlayerTurn(true);
   else netEnterWait();
